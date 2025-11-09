@@ -1,0 +1,471 @@
+import { useQuery, useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
+import { Id } from "../convex/_generated/dataModel";
+import { useState, useEffect } from "react";
+import { toast } from "sonner";
+import { formatDistanceToNow } from "date-fns";
+
+interface AdDetailProps {
+  adId: Id<"ads">;
+  onBack: () => void;
+  onShowAuth: () => void;
+}
+
+export function AdDetail({ adId, onBack, onShowAuth }: AdDetailProps) {
+  const [showChat, setShowChat] = useState(false);
+  const [messageText, setMessageText] = useState("");
+  const [chatId, setChatId] = useState<Id<"chats"> | null>(null);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+
+  const ad = useQuery(api.adDetail.getAdById, { adId });
+  const isAdSaved = useQuery(api.adDetail.isAdSaved, { adId });
+  const existingChat = useQuery(api.adDetail.getChatForAd, { adId });
+  const messages = useQuery(
+    api.adDetail.getChatMessages, 
+    chatId ? { chatId } : "skip"
+  );
+
+  const saveAd = useMutation(api.adDetail.saveAd);
+  const getOrCreateChat = useMutation(api.adDetail.getOrCreateChat);
+  const sendMessage = useMutation(api.adDetail.sendMessage);
+  const incrementViews = useMutation(api.adDetail.incrementViews);
+  const user = useQuery(api.auth.loggedInUser);
+
+  useEffect(() => {
+    if (existingChat) {
+      setChatId(existingChat._id);
+    }
+  }, [existingChat]);
+
+  useEffect(() => {
+    // Increment views when component mounts
+    incrementViews({ adId }).catch(() => {
+      // Ignore errors for view counting
+    });
+  }, [adId, incrementViews]);
+
+  const handleSave = async () => {
+    try {
+      const result = await saveAd({ adId });
+      toast.success(result.saved ? "Ad saved!" : "Ad removed from saved");
+    } catch (error) {
+      toast.error("Please sign in to save ads");
+    }
+  };
+
+  const handleShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: ad?.title,
+          text: ad?.description,
+          url: window.location.href,
+        });
+      } catch (error) {
+        // User cancelled sharing
+      }
+    } else {
+      // Fallback to copying URL
+      await navigator.clipboard.writeText(window.location.href);
+      toast.success("Link copied to clipboard!");
+    }
+  };
+
+  const handleStartChat = async () => {
+    if (!user) {
+      onShowAuth();
+      return;
+    }
+
+    try {
+      const newChatId = await getOrCreateChat({ adId });
+      setChatId(newChatId);
+      setShowChat(true);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to start chat");
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!messageText.trim() || !chatId) return;
+
+    try {
+      await sendMessage({ chatId, content: messageText.trim() });
+      setMessageText("");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to send message");
+    }
+  };
+
+  const nextImage = () => {
+    if (ad && ad.images.length > 1) {
+      setCurrentImageIndex((prev) => (prev + 1) % ad.images.length);
+    }
+  };
+
+  const prevImage = () => {
+    if (ad && ad.images.length > 1) {
+      setCurrentImageIndex((prev) => (prev - 1 + ad.images.length) % ad.images.length);
+    }
+  };
+
+  if (!ad) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        {/* Header skeleton */}
+        <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between h-16">
+              <button
+                onClick={onBack}
+                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                Back to listings
+              </button>
+              <h1 className="text-xl font-semibold text-[#333333]">Loading...</h1>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-gray-200 rounded-lg animate-pulse"></div>
+                <div className="w-10 h-10 bg-gray-200 rounded-lg animate-pulse"></div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Loading content */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white rounded-lg overflow-hidden shadow-sm">
+                <div className="aspect-video bg-gray-200 animate-pulse"></div>
+              </div>
+              <div className="bg-white rounded-lg p-6 shadow-sm">
+                <div className="h-8 bg-gray-200 rounded animate-pulse mb-4"></div>
+                <div className="h-6 bg-gray-200 rounded animate-pulse mb-2"></div>
+                <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4"></div>
+              </div>
+            </div>
+            <div className="space-y-6">
+              <div className="bg-white rounded-lg p-6 shadow-sm">
+                <div className="h-6 bg-gray-200 rounded animate-pulse mb-4"></div>
+                <div className="h-12 bg-gray-200 rounded animate-pulse"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const timeAgo = formatDistanceToNow(new Date(ad._creationTime), { addSuffix: true });
+  const images = ad.images.length > 0 ? ad.images : ['https://images.unsplash.com/photo-1560472354-b33ff0c44a43?w=800&h=600&fit=crop'];
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <button
+              onClick={onBack}
+              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Back to listings
+            </button>
+            <h1 className="text-xl font-semibold text-[#333333]">{ad.title}</h1>
+            <div className="flex items-center gap-3">
+              {user && ad.userId !== user._id && (
+                <button
+                  onClick={handleSave}
+                  className={`p-2 rounded-lg transition-colors ${
+                    isAdSaved 
+                      ? 'bg-red-100 text-red-600 hover:bg-red-200' 
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                  title={isAdSaved ? "Remove from saved" : "Save ad"}
+                >
+                <svg className="w-5 h-5" fill={isAdSaved ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                </svg>
+              </button>
+              )}
+              <button
+                onClick={handleShare}
+                className="p-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                title="Share ad"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Main Content */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Image Gallery with Slider */}
+            <div className="bg-white rounded-lg overflow-hidden shadow-sm">
+              <div className="relative aspect-video bg-gray-100">
+                <img
+                  src={images[currentImageIndex]}
+                  alt={`${ad.title} - Image ${currentImageIndex + 1}`}
+                  className="w-full h-full object-cover"
+                />
+                
+                {/* Navigation arrows for multiple images */}
+                {images.length > 1 && (
+                  <>
+                    <button
+                      onClick={prevImage}
+                      className="absolute left-4 top-1/2 -translate-y-1/2 bg-black bg-opacity-50 text-white p-2 rounded-full hover:bg-opacity-70 transition-all"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={nextImage}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 bg-black bg-opacity-50 text-white p-2 rounded-full hover:bg-opacity-70 transition-all"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  </>
+                )}
+
+                {/* Image counter */}
+                {images.length > 1 && (
+                  <div className="absolute bottom-4 right-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-full text-sm">
+                    {currentImageIndex + 1} / {images.length}
+                  </div>
+                )}
+              </div>
+
+              {/* Thumbnail strip for multiple images */}
+              {images.length > 1 && (
+                <div className="p-4 bg-gray-50">
+                  <div className="flex gap-2 overflow-x-auto">
+                    {images.map((image, index) => (
+                      <button
+                        key={index}
+                        onClick={() => setCurrentImageIndex(index)}
+                        className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                          index === currentImageIndex 
+                            ? 'border-[#FF6600] ring-2 ring-[#FF6600] ring-opacity-30' 
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <img
+                          src={image}
+                          alt={`Thumbnail ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Ad Information */}
+            <div className="bg-white rounded-lg p-6 shadow-sm">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <h1 className="text-2xl font-bold text-[#333333] mb-2">{ad.title}</h1>
+                  <p className="text-3xl font-bold text-[#FF6600]">${ad.price.toLocaleString()} AUD</p>
+                </div>
+                <div className="text-right text-sm text-gray-500">
+                  <p>{ad.views} views</p>
+                  <p>Posted {timeAgo}</p>
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-[#333333] mb-3">Description</h3>
+                <p className="text-gray-700 leading-relaxed">{ad.description}</p>
+                {ad.extendedDescription && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <h4 className="font-medium text-[#333333] mb-2">Additional Details</h4>
+                    <p className="text-gray-700 leading-relaxed">{ad.extendedDescription}</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-4 text-sm text-gray-600">
+                <div className="flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span>{ad.location}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Map */}
+            <div className="bg-white rounded-lg p-6 shadow-sm">
+              <h3 className="text-lg font-semibold text-[#333333] mb-4">Location</h3>
+              <div className="h-64 bg-gray-100 rounded-lg flex items-center justify-center">
+                <div className="text-center text-gray-500">
+                  <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <p>Map showing {ad.location}</p>
+                  <p className="text-sm">(Map integration coming soon)</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Sidebar */}
+          <div className="space-y-6">
+            {/* Seller Info */}
+            <div className="bg-white rounded-lg p-6 shadow-sm">
+              <h3 className="text-lg font-semibold text-[#333333] mb-4">Seller Information</h3>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center">
+                  <svg className="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="font-medium text-[#333333]">{ad.seller?.name || "Anonymous"}</p>
+                  <p className="text-sm text-gray-500">Seller</p>
+                </div>
+              </div>
+
+              {user && ad.userId !== user._id && (
+                <button
+                  onClick={handleStartChat}
+                  className="w-full bg-[#FF6600] text-white py-3 px-4 rounded-lg hover:bg-[#e55a00] transition-colors font-medium"
+                >
+                  Contact Seller
+                </button>
+              )}
+
+              {user && ad.userId === user._id && (
+                <div className="text-center py-3 text-gray-500">
+                  <p>This is your listing</p>
+                </div>
+              )}
+
+              {!user && (
+                <button
+                  onClick={onShowAuth}
+                  className="w-full bg-[#FF6600] text-white py-3 px-4 rounded-lg hover:bg-[#e55a00] transition-colors font-medium"
+                >
+                  Sign in to contact seller
+                </button>
+              )}
+            </div>
+
+            {/* Chat Section */}
+            {showChat && chatId && (
+              <div className="bg-white rounded-lg shadow-sm">
+                <div className="p-4 border-b border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-[#333333]">Chat with Seller</h3>
+                    <button
+                      onClick={() => setShowChat(false)}
+                      className="text-gray-500 hover:text-gray-700"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="h-64 overflow-y-auto p-4 space-y-3">
+                  {messages?.map((message) => (
+                    <div
+                      key={message._id}
+                      className={`flex ${message.isCurrentUser ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div
+                        className={`max-w-xs px-3 py-2 rounded-lg ${
+                          message.isCurrentUser
+                            ? 'bg-[#FF6600] text-white'
+                            : 'bg-gray-100 text-gray-900'
+                        }`}
+                      >
+                        <p className="text-sm">{message.content}</p>
+                        <p className={`text-xs mt-1 ${
+                          message.isCurrentUser ? 'text-orange-200' : 'text-gray-500'
+                        }`}>
+                          {formatDistanceToNow(new Date(message.timestamp), { addSuffix: true })}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="p-4 border-t border-gray-200">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={messageText}
+                      onChange={(e) => setMessageText(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                      placeholder="Type your message..."
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#FF6600] focus:border-transparent outline-none"
+                    />
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={!messageText.trim()}
+                      className="bg-[#FF6600] text-white px-4 py-2 rounded-lg hover:bg-[#e55a00] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Quick Actions */}
+            <div className="bg-white rounded-lg p-6 shadow-sm">
+              <h3 className="text-lg font-semibold text-[#333333] mb-4">Quick Actions</h3>
+              <div className="space-y-3">
+                {user && ad.userId !== user._id && (
+                <button
+                  onClick={handleSave}
+                  className={`w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg transition-colors ${
+                    isAdSaved
+                      ? 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'
+                      : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <svg className="w-4 h-4" fill={isAdSaved ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                  </svg>
+                  {isAdSaved ? 'Remove from Saved' : 'Save Ad'}
+                </button>
+                )}
+                <button
+                  onClick={handleShare}
+                  className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                  </svg>
+                  Share Ad
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
